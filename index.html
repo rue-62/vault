@@ -1,0 +1,743 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta name="description" content="Offline AES-256-GCM encryptor. Nothing leaves your browser." />
+  <meta name="theme-color" content="#0d0e12" />
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🔐</text></svg>" />
+  <title>Vault</title>
+  <style>
+    /* ── Reset ─────────────────────────────────────────────────── */
+    *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+
+    /* ── Tokens ────────────────────────────────────────────────── */
+    :root {
+      --bg:          #0d0e12;
+      --surface:     #141620;
+      --surface-2:   #1a1d27;
+      --border:      #252932;
+      --text:        #c8ccda;
+      --muted:       #5a6074;
+      --accent:      #4d6bda;
+      --accent-dim:  rgba(77, 107, 218, 0.13);
+      --success:     #3ecf8e;
+      --success-dim: rgba(62, 207, 142, 0.11);
+      --error:       #d95c5c;
+      --error-dim:   rgba(217, 92, 92, 0.11);
+      /* Ciphertext gets a distinct teal treatment — makes encrypted output
+         visually "feel" different from plaintext; the design signature. */
+      --cipher:      #5ec4b6;
+      --radius:      9px;
+      --t:           0.14s ease;
+    }
+
+    /* ── Base ──────────────────────────────────────────────────── */
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', system-ui, sans-serif;
+      font-size: 15px;
+      line-height: 1.55;
+      background: var(--bg);
+      color: var(--text);
+      min-height: 100vh;
+      display: flex;
+      justify-content: center;
+      padding: 3rem 1rem 5rem;
+    }
+
+    .page {
+      width: 100%;
+      max-width: 540px;
+    }
+
+    /* ── Header ────────────────────────────────────────────────── */
+    .header {
+      text-align: center;
+      margin-bottom: 2.75rem;
+    }
+
+    .lockmark {
+      display: inline-flex;
+      align-items: center;
+      justify-content: center;
+      width: 54px;
+      height: 54px;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: 15px;
+      color: var(--accent);
+      margin-bottom: 1.1rem;
+    }
+
+    .lockmark svg { width: 26px; height: 26px; }
+
+    h1 {
+      font-size: 1.45rem;
+      font-weight: 700;
+      letter-spacing: -0.03em;
+      color: var(--text);
+      margin-bottom: 0.25rem;
+    }
+
+    .tagline {
+      font-size: 0.78rem;
+      color: var(--muted);
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+    }
+
+    /* ── Tabs ──────────────────────────────────────────────────── */
+    .tabs {
+      display: flex;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      padding: 3px;
+      gap: 3px;
+      margin-bottom: 1.75rem;
+    }
+
+    .tab {
+      flex: 1;
+      padding: 0.52rem 1rem;
+      background: none;
+      border: none;
+      border-radius: calc(var(--radius) - 3px);
+      color: var(--muted);
+      font-size: 0.875rem;
+      font-weight: 500;
+      font-family: inherit;
+      cursor: pointer;
+      transition: background var(--t), color var(--t);
+      -webkit-tap-highlight-color: transparent;
+    }
+
+    .tab.active {
+      background: var(--surface-2);
+      color: var(--text);
+    }
+
+    .tab:not(.active):hover { color: var(--text); }
+
+    /* ── Panels ────────────────────────────────────────────────── */
+    .panel { display: none; }
+    .panel.active { display: block; }
+
+    /* ── Field ─────────────────────────────────────────────────── */
+    .field { margin-bottom: 1rem; }
+
+    .label {
+      display: block;
+      font-size: 0.72rem;
+      font-weight: 600;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.07em;
+      margin-bottom: 0.38rem;
+    }
+
+    .input-wrap { position: relative; }
+
+    input[type="text"],
+    input[type="password"],
+    textarea {
+      display: block;
+      width: 100%;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      color: var(--text);
+      font-family: inherit;
+      font-size: 0.9rem;
+      padding: 0.68rem 1rem;
+      outline: none;
+      transition: border-color var(--t), box-shadow var(--t);
+      -webkit-appearance: none;
+      appearance: none;
+    }
+
+    input[type="text"]:focus,
+    input[type="password"]:focus,
+    textarea:focus {
+      border-color: var(--accent);
+      box-shadow: 0 0 0 3px var(--accent-dim);
+    }
+
+    input[type="text"],
+    input[type="password"] { padding-right: 2.75rem; }
+
+    textarea {
+      resize: vertical;
+      min-height: 108px;
+      line-height: 1.55;
+    }
+
+    textarea.mono {
+      font-family: 'Fira Code', 'Cascadia Code', 'SF Mono', ui-monospace, monospace;
+      font-size: 0.78rem;
+      word-break: break-all;
+      color: var(--cipher);
+      min-height: 96px;
+    }
+
+    /* Eye toggle */
+    .eye {
+      position: absolute;
+      right: 0.7rem;
+      top: 50%;
+      transform: translateY(-50%);
+      background: none;
+      border: none;
+      color: var(--muted);
+      cursor: pointer;
+      padding: 4px;
+      display: flex;
+      transition: color var(--t);
+      -webkit-tap-highlight-color: transparent;
+    }
+
+    .eye:hover { color: var(--text); }
+    .eye svg { width: 16px; height: 16px; pointer-events: none; }
+
+    /* ── Action button ─────────────────────────────────────────── */
+    .action {
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      gap: 0.45rem;
+      width: 100%;
+      padding: 0.78rem 1.25rem;
+      margin-top: 0.25rem;
+      background: var(--accent);
+      border: none;
+      border-radius: var(--radius);
+      color: #fff;
+      font-family: inherit;
+      font-size: 0.88rem;
+      font-weight: 600;
+      cursor: pointer;
+      transition: opacity var(--t), transform 0.07s ease;
+      -webkit-tap-highlight-color: transparent;
+    }
+
+    .action:hover:not(:disabled) { opacity: 0.87; }
+    .action:active:not(:disabled) { transform: scale(0.987); }
+    .action:disabled { opacity: 0.4; cursor: default; }
+
+    .hint {
+      text-align: center;
+      font-size: 0.7rem;
+      color: var(--muted);
+      margin-top: 0.45rem;
+    }
+
+    /* Spinner */
+    .spin {
+      display: inline-block;
+      width: 14px;
+      height: 14px;
+      border: 1.8px solid rgba(255,255,255,0.3);
+      border-top-color: #fff;
+      border-radius: 50%;
+      animation: spin 0.5s linear infinite;
+      flex-shrink: 0;
+    }
+
+    @keyframes spin { to { transform: rotate(360deg); } }
+
+    /* ── Status ────────────────────────────────────────────────── */
+    .status {
+      display: flex;
+      align-items: flex-start;
+      gap: 0.45rem;
+      font-size: 0.81rem;
+      padding: 0.58rem 0.85rem;
+      border-radius: calc(var(--radius) - 2px);
+      margin-top: 0.9rem;
+      border: 1px solid transparent;
+      line-height: 1.4;
+    }
+
+    .status.error {
+      background: var(--error-dim);
+      border-color: rgba(217, 92, 92, 0.25);
+      color: var(--error);
+    }
+
+    .status.ok {
+      background: var(--success-dim);
+      border-color: rgba(62, 207, 142, 0.22);
+      color: var(--success);
+    }
+
+    /* ── Output card ───────────────────────────────────────────── */
+    /* The signature design element: ciphertext has a left accent bar
+       and teal monospace rendering, making encrypted output visually
+       "feel" distinct from everything else on the page. */
+    .out-card {
+      margin-top: 0.9rem;
+      background: var(--surface);
+      border: 1px solid var(--border);
+      border-radius: var(--radius);
+      overflow: hidden;
+    }
+
+    .out-card.cipher { border-left: 3px solid var(--accent); }
+    .out-card.plain  { border-left: 3px solid var(--success); }
+
+    .out-head {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 0.55rem 0.85rem;
+      border-bottom: 1px solid var(--border);
+    }
+
+    .out-label {
+      font-size: 0.68rem;
+      font-weight: 600;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.07em;
+    }
+
+    .copy-btn {
+      background: var(--surface-2);
+      border: 1px solid var(--border);
+      border-radius: 5px;
+      color: var(--text);
+      font-family: inherit;
+      font-size: 0.7rem;
+      font-weight: 500;
+      padding: 0.22rem 0.6rem;
+      cursor: pointer;
+      transition: all var(--t);
+      -webkit-tap-highlight-color: transparent;
+    }
+
+    .copy-btn:hover { background: var(--border); }
+    .copy-btn.done { color: var(--success); border-color: var(--success); }
+
+    .out-body {
+      padding: 0.85rem;
+      font-family: 'Fira Code', 'Cascadia Code', 'SF Mono', ui-monospace, monospace;
+      font-size: 0.76rem;
+      color: var(--cipher);
+      word-break: break-all;
+      white-space: pre-wrap;
+      max-height: 180px;
+      overflow-y: auto;
+      user-select: all;
+      -webkit-user-select: all;
+      line-height: 1.65;
+    }
+
+    .out-body.plain {
+      font-family: inherit;
+      font-size: 0.875rem;
+      color: var(--text);
+      word-break: break-word;
+    }
+
+    /* ── Info footer ───────────────────────────────────────────── */
+    .info {
+      margin-top: 3.5rem;
+      padding-top: 1.5rem;
+      border-top: 1px solid var(--border);
+    }
+
+    .info-title {
+      font-size: 0.68rem;
+      font-weight: 600;
+      color: var(--muted);
+      text-transform: uppercase;
+      letter-spacing: 0.07em;
+      margin-bottom: 0.7rem;
+    }
+
+    .info p {
+      font-size: 0.79rem;
+      color: var(--muted);
+      line-height: 1.7;
+      margin-bottom: 0.35rem;
+    }
+
+    /* ── Utilities ─────────────────────────────────────────────── */
+    .hidden { display: none !important; }
+
+    /* ── Responsive ────────────────────────────────────────────── */
+    @media (max-width: 480px) {
+      body { padding: 1.75rem 0.875rem 4rem; }
+      h1   { font-size: 1.3rem; }
+      .header { margin-bottom: 2.25rem; }
+    }
+
+    @media (prefers-reduced-motion: reduce) {
+      .spin { animation: none; opacity: 0.6; }
+    }
+  </style>
+</head>
+<body>
+<noscript>
+  <p style="padding:2rem;color:#d95c5c;text-align:center">
+    JavaScript is required — all crypto runs locally in your browser.
+  </p>
+</noscript>
+
+<div class="page">
+
+  <!-- Header -->
+  <header class="header">
+    <div class="lockmark" aria-hidden="true">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.6"
+           stroke-linecap="round" stroke-linejoin="round">
+        <rect x="3" y="11" width="18" height="11" rx="2.5"/>
+        <path d="M7 11V7a5 5 0 0 1 10 0v4"/>
+        <circle cx="12" cy="16.5" r="1.3" fill="currentColor" stroke="none"/>
+      </svg>
+    </div>
+    <h1>Vault</h1>
+    <p class="tagline">AES-256-GCM &nbsp;·&nbsp; Client-side &nbsp;·&nbsp; Zero network</p>
+  </header>
+
+  <!-- Tabs -->
+  <div class="tabs" role="tablist" aria-label="Encryption mode">
+    <button class="tab active" id="tab-enc" role="tab" aria-selected="true"
+            aria-controls="panel-enc" onclick="switchTab('enc')">Encrypt</button>
+    <button class="tab" id="tab-dec" role="tab" aria-selected="false"
+            aria-controls="panel-dec" onclick="switchTab('dec')">Decrypt</button>
+  </div>
+
+  <!-- ── Encrypt Panel ── -->
+  <section class="panel active" id="panel-enc" role="tabpanel" aria-labelledby="tab-enc">
+    <div class="field">
+      <label class="label" for="enc-pass">Passphrase</label>
+      <div class="input-wrap">
+        <input type="password" id="enc-pass" placeholder="Your secret passphrase"
+               autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" />
+        <button class="eye" type="button" aria-label="Show / hide passphrase"
+                onclick="toggleVis('enc-pass', this)">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"
+               stroke-linecap="round" stroke-linejoin="round">
+            <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/>
+            <circle cx="12" cy="12" r="3"/>
+          </svg>
+        </button>
+      </div>
+    </div>
+
+    <div class="field">
+      <label class="label" for="enc-input">Plaintext</label>
+      <textarea id="enc-input" placeholder="Enter the text to encrypt…" spellcheck="false"></textarea>
+    </div>
+
+    <div id="enc-status" class="hidden"></div>
+
+    <button class="action" id="enc-btn" type="button" onclick="doEncrypt()">
+      <span id="enc-lbl">Encrypt</span>
+      <span id="enc-spin" class="spin hidden" aria-hidden="true"></span>
+    </button>
+    <p class="hint" id="enc-hint">⌘ Return to encrypt</p>
+
+    <div id="enc-card" class="out-card cipher hidden">
+      <div class="out-head">
+        <span class="out-label">Encrypted output</span>
+        <button class="copy-btn" type="button" id="enc-copy"
+                onclick="doCopy('enc-out', 'enc-copy')">Copy</button>
+      </div>
+      <div class="out-body" id="enc-out"></div>
+    </div>
+  </section>
+
+  <!-- ── Decrypt Panel ── -->
+  <section class="panel" id="panel-dec" role="tabpanel" aria-labelledby="tab-dec">
+    <div class="field">
+      <label class="label" for="dec-pass">Passphrase</label>
+      <div class="input-wrap">
+        <input type="password" id="dec-pass" placeholder="Your secret passphrase"
+               autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" />
+        <button class="eye" type="button" aria-label="Show / hide passphrase"
+                onclick="toggleVis('dec-pass', this)">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"
+               stroke-linecap="round" stroke-linejoin="round">
+            <path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/>
+            <circle cx="12" cy="12" r="3"/>
+          </svg>
+        </button>
+      </div>
+    </div>
+
+    <div class="field">
+      <label class="label" for="dec-input">Encrypted text</label>
+      <textarea id="dec-input" class="mono" placeholder="Paste ENC:v1:… here" spellcheck="false"></textarea>
+    </div>
+
+    <div id="dec-status" class="hidden"></div>
+
+    <button class="action" id="dec-btn" type="button" onclick="doDecrypt()">
+      <span id="dec-lbl">Decrypt</span>
+      <span id="dec-spin" class="spin hidden" aria-hidden="true"></span>
+    </button>
+    <p class="hint" id="dec-hint">⌘ Return to decrypt</p>
+
+    <div id="dec-card" class="out-card plain hidden">
+      <div class="out-head">
+        <span class="out-label">Decrypted output</span>
+        <button class="copy-btn" type="button" id="dec-copy"
+                onclick="doCopy('dec-out', 'dec-copy')">Copy</button>
+      </div>
+      <div class="out-body plain" id="dec-out"></div>
+    </div>
+  </section>
+
+  <!-- Info -->
+  <footer class="info">
+    <p class="info-title">How it works</p>
+    <p>Everything runs in your browser — no data is sent anywhere, ever.</p>
+    <p>Your passphrase drives PBKDF2-SHA256 (600 000 iterations) to derive a unique key. Every encryption uses a fresh random salt and IV, so identical text produces different output each time.</p>
+    <p>AES-256-GCM both encrypts and authenticates: a wrong passphrase fails loudly rather than silently producing garbage. The output is self-contained — copy it anywhere.</p>
+    <p>Use a passphrase you can memorize but not guess. Four or five unrelated words strung together works well.</p>
+  </footer>
+
+</div><!-- .page -->
+
+<script>
+'use strict';
+
+/* ── Config ──────────────────────────────────────────────────────── */
+const ITER     = 600_000;
+const SALT_LEN = 16;
+const IV_LEN   = 12;
+const VERSION  = 0x01;
+const PREFIX   = 'ENC:v1:';
+
+/* ── Encoding helpers ────────────────────────────────────────────── */
+const TE = new TextEncoder();
+const TD = new TextDecoder();
+
+function u8ToB64(u8) {
+  let s = '';
+  for (let i = 0; i < u8.length; i++) s += String.fromCharCode(u8[i]);
+  return btoa(s);
+}
+
+function b64ToU8(b64) {
+  const bin = atob(b64);
+  const u8  = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) u8[i] = bin.charCodeAt(i);
+  return u8;
+}
+
+/* ── Crypto core ─────────────────────────────────────────────────── */
+async function deriveKey(passphrase, salt) {
+  const raw = await crypto.subtle.importKey(
+    'raw', TE.encode(passphrase), 'PBKDF2', false, ['deriveKey']
+  );
+  return crypto.subtle.deriveKey(
+    { name: 'PBKDF2', salt, iterations: ITER, hash: 'SHA-256' },
+    raw,
+    { name: 'AES-GCM', length: 256 },
+    false,
+    ['encrypt', 'decrypt']
+  );
+}
+
+// Output layout: [ 1B version | 16B salt | 12B iv | N+16B ciphertext+tag ]
+// Prefixed: ENC:v1:<base64>
+async function vaultEncrypt(plaintext, passphrase) {
+  const salt = crypto.getRandomValues(new Uint8Array(SALT_LEN));
+  const iv   = crypto.getRandomValues(new Uint8Array(IV_LEN));
+  const key  = await deriveKey(passphrase, salt);
+  const ct   = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, TE.encode(plaintext));
+
+  const payload = new Uint8Array(1 + SALT_LEN + IV_LEN + ct.byteLength);
+  payload[0] = VERSION;
+  payload.set(salt, 1);
+  payload.set(iv,   1 + SALT_LEN);
+  payload.set(new Uint8Array(ct), 1 + SALT_LEN + IV_LEN);
+
+  return PREFIX + u8ToB64(payload);
+}
+
+async function vaultDecrypt(token, passphrase) {
+  // Strip any accidental whitespace (e.g. line-breaks from Bitwarden copy)
+  token = token.trim().replace(/\s+/g, '');
+
+  if (!token.startsWith(PREFIX))
+    throw new Error('Not a Vault token — expected ENC:v1:…');
+
+  let payload;
+  try { payload = b64ToU8(token.slice(PREFIX.length)); }
+  catch { throw new Error('Invalid token — base64 decode failed'); }
+
+  if (payload[0] !== VERSION)
+    throw new Error(`Unsupported version byte: 0x${payload[0].toString(16)}`);
+
+  const salt = payload.slice(1,             1 + SALT_LEN);
+  const iv   = payload.slice(1 + SALT_LEN,  1 + SALT_LEN + IV_LEN);
+  const ct   = payload.slice(1 + SALT_LEN + IV_LEN);
+
+  const key = await deriveKey(passphrase, salt);
+
+  let pt;
+  try {
+    pt = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, ct);
+  } catch {
+    throw new Error('Decryption failed — wrong passphrase or corrupted data');
+  }
+
+  return TD.decode(pt);
+}
+
+/* ── UI helpers ──────────────────────────────────────────────────── */
+function $  (id) { return document.getElementById(id); }
+
+function showStatus(p, type, msg) {
+  const el = $(p + '-status');
+  el.className = 'status ' + type;
+  el.textContent = msg;
+}
+
+function clearStatus(p) {
+  const el = $(p + '-status');
+  el.className = 'hidden';
+  el.textContent = '';
+}
+
+function setWorking(p, on) {
+  const btn   = $(p + '-btn');
+  const lbl   = $(p + '-lbl');
+  const spin  = $(p + '-spin');
+  const hint  = $(p + '-hint');
+  btn.disabled = on;
+  lbl.textContent = on ? 'Working…' : (p === 'enc' ? 'Encrypt' : 'Decrypt');
+  spin.classList.toggle('hidden', !on);
+  hint.classList.toggle('hidden', on);
+}
+
+function showOutput(p, text) {
+  $(p + '-out').textContent = text;
+  $(p + '-card').classList.remove('hidden');
+}
+
+function hideOutput(p) {
+  $(p + '-card').classList.add('hidden');
+}
+
+/* ── Tab switching ───────────────────────────────────────────────── */
+function switchTab(name) {
+  ['enc', 'dec'].forEach(t => {
+    const on = t === name;
+    $('panel-' + t).classList.toggle('active', on);
+    const tab = $('tab-' + t);
+    tab.classList.toggle('active', on);
+    tab.setAttribute('aria-selected', String(on));
+  });
+}
+
+/* ── Eye toggle ──────────────────────────────────────────────────── */
+function toggleVis(id, btn) {
+  const inp = $(id);
+  const show = inp.type === 'password';
+  inp.type = show ? 'text' : 'password';
+  btn.querySelector('svg').innerHTML = show
+    ? /* eye-off (Feather) */
+      `<path d="M17.94 17.94A10.07 10.07 0 0 1 12 20c-7 0-11-8-11-8a18.45 18.45 0 0 1 5.06-5.94
+       M9.9 4.24A9.12 9.12 0 0 1 12 4c7 0 11 8 11 8a18.5 18.5 0 0 1-2.16 3.19
+       m-6.72-1.07a3 3 0 1 1-4.24-4.24"/><line x1="1" y1="1" x2="23" y2="23"/>`
+    : /* eye (Feather) */
+      `<path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/>`;
+}
+
+/* ── Copy ────────────────────────────────────────────────────────── */
+async function doCopy(outId, btnId) {
+  const text = $(outId).textContent;
+  const btn  = $(btnId);
+  try {
+    if (navigator.clipboard?.writeText) {
+      await navigator.clipboard.writeText(text);
+    } else {
+      // Fallback for older WebKit (iOS < 13.4)
+      const ta = Object.assign(document.createElement('textarea'), {
+        value: text,
+        style: 'position:fixed;opacity:0'
+      });
+      document.body.appendChild(ta);
+      ta.select();
+      document.execCommand('copy');
+      ta.remove();
+    }
+    btn.textContent = 'Copied!';
+    btn.classList.add('done');
+  } catch {
+    btn.textContent = 'Failed';
+  }
+  setTimeout(() => { btn.textContent = 'Copy'; btn.classList.remove('done'); }, 2000);
+}
+
+/* ── Encrypt ─────────────────────────────────────────────────────── */
+async function doEncrypt() {
+  clearStatus('enc');
+  hideOutput('enc');
+
+  const pass = $('enc-pass').value;
+  const text = $('enc-input').value;
+
+  if (!pass) return showStatus('enc', 'error', 'Enter a passphrase.');
+  if (!text) return showStatus('enc', 'error', 'Enter text to encrypt.');
+
+  setWorking('enc', true);
+  try {
+    const result = await vaultEncrypt(text, pass);
+    showOutput('enc', result);
+    showStatus('enc', 'ok', 'Encrypted. Copy the output to store in Bitwarden.');
+  } catch (err) {
+    showStatus('enc', 'error', err.message);
+  } finally {
+    setWorking('enc', false);
+  }
+}
+
+/* ── Decrypt ─────────────────────────────────────────────────────── */
+async function doDecrypt() {
+  clearStatus('dec');
+  hideOutput('dec');
+
+  const pass   = $('dec-pass').value;
+  const cipher = $('dec-input').value;
+
+  if (!pass)   return showStatus('dec', 'error', 'Enter the passphrase.');
+  if (!cipher) return showStatus('dec', 'error', 'Paste the encrypted text.');
+
+  setWorking('dec', true);
+  try {
+    const result = await vaultDecrypt(cipher, pass);
+    showOutput('dec', result);
+    showStatus('dec', 'ok', 'Decrypted successfully.');
+  } catch (err) {
+    showStatus('dec', 'error', err.message);
+  } finally {
+    setWorking('dec', false);
+  }
+}
+
+/* ── Keyboard shortcut (⌘ / Ctrl + Enter) ───────────────────────── */
+document.addEventListener('keydown', e => {
+  if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
+    const active = document.querySelector('.panel.active');
+    if (active.id === 'panel-enc') doEncrypt();
+    else                           doDecrypt();
+  }
+});
+
+/* ── Detect non-secure context ───────────────────────────────────── */
+if (location.protocol !== 'https:' && location.hostname !== 'localhost') {
+  document.querySelector('.page').insertAdjacentHTML('afterbegin',
+    `<div class="status error" style="margin-bottom:1.5rem">
+      ⚠ Insecure context — open this site over HTTPS for the Web Crypto API to work.
+    </div>`
+  );
+}
+</script>
+</body>
+</html>
