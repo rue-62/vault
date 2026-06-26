@@ -6,6 +6,20 @@
   <meta name="description" content="Offline AES-256-GCM encryptor. Nothing leaves your browser." />
   <meta name="theme-color" content="#0d0e12" />
   <link rel="icon" href="data:image/svg+xml,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 100 100%22><text y=%22.9em%22 font-size=%2290%22>🔐</text></svg>" />
+  <!--
+    CSP: default-src 'none' blocks everything not explicitly allowed.
+    'unsafe-inline' is required because all JS and CSS are inline in this file
+    (no external sources). Despite 'unsafe-inline', this CSP still:
+      · Blocks any <script src="…"> or <link rel="stylesheet" href="…">
+      · Blocks any <form action="…"> submissions (form-action 'none')
+      · Blocks base-tag injection that could redirect relative URLs (base-uri 'none')
+      · Allows only data: URIs as images (the emoji favicon)
+    Note: frame-ancestors is not honoured in a <meta> CSP — that requires an
+    HTTP header, which GitHub Pages does not expose. Self-hosting behind a
+    reverse proxy is the only way to add X-Frame-Options / frame-ancestors.
+  -->
+  <meta http-equiv="Content-Security-Policy"
+        content="default-src 'none'; script-src 'unsafe-inline'; style-src 'unsafe-inline'; img-src data:; form-action 'none'; base-uri 'none';" />
   <title>Vault</title>
   <style>
     /* ── Reset ─────────────────────────────────────────────────── */
@@ -414,7 +428,8 @@
       <label class="label" for="enc-pass">Passphrase</label>
       <div class="input-wrap">
         <input type="password" id="enc-pass" placeholder="Your secret passphrase"
-               autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" />
+               autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"
+               data-lpignore="true" data-1p-ignore="true" />
         <button class="eye" type="button" aria-label="Show / hide passphrase"
                 onclick="toggleVis('enc-pass', this)">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"
@@ -455,7 +470,8 @@
       <label class="label" for="dec-pass">Passphrase</label>
       <div class="input-wrap">
         <input type="password" id="dec-pass" placeholder="Your secret passphrase"
-               autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false" />
+               autocomplete="off" autocorrect="off" autocapitalize="off" spellcheck="false"
+               data-lpignore="true" data-1p-ignore="true" />
         <button class="eye" type="button" aria-label="Show / hide passphrase"
                 onclick="toggleVis('dec-pass', this)">
           <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"
@@ -508,8 +524,11 @@
 const ITER     = 600_000;
 const SALT_LEN = 16;
 const IV_LEN   = 12;
+const TAG_LEN  = 128; // AES-GCM auth-tag bits — explicit, not relying on browser default
 const VERSION  = 0x01;
 const PREFIX   = 'ENC:v1:';
+// Minimum valid payload: version(1) + salt(16) + iv(12) + 1-byte plaintext + tag(16) = 46 bytes
+const MIN_PAYLOAD = 1 + SALT_LEN + IV_LEN + 1 + (TAG_LEN / 8);
 
 /* ── Encoding helpers ────────────────────────────────────────────── */
 const TE = new TextEncoder();
@@ -548,7 +567,8 @@ async function vaultEncrypt(plaintext, passphrase) {
   const salt = crypto.getRandomValues(new Uint8Array(SALT_LEN));
   const iv   = crypto.getRandomValues(new Uint8Array(IV_LEN));
   const key  = await deriveKey(passphrase, salt);
-  const ct   = await crypto.subtle.encrypt({ name: 'AES-GCM', iv }, key, TE.encode(plaintext));
+  // tagLength is explicit: 128 bits (16 bytes appended to ciphertext by WebCrypto)
+  const ct   = await crypto.subtle.encrypt({ name: 'AES-GCM', iv, tagLength: TAG_LEN }, key, TE.encode(plaintext));
 
   const payload = new Uint8Array(1 + SALT_LEN + IV_LEN + ct.byteLength);
   payload[0] = VERSION;
@@ -570,6 +590,11 @@ async function vaultDecrypt(token, passphrase) {
   try { payload = b64ToU8(token.slice(PREFIX.length)); }
   catch { throw new Error('Invalid token — base64 decode failed'); }
 
+  // Guard: check length before indexing into the array.
+  // Without this, payload[0] === undefined and undefined.toString(16) throws a TypeError.
+  if (payload.length < MIN_PAYLOAD)
+    throw new Error('Token too short to be valid');
+
   if (payload[0] !== VERSION)
     throw new Error(`Unsupported version byte: 0x${payload[0].toString(16)}`);
 
@@ -581,8 +606,11 @@ async function vaultDecrypt(token, passphrase) {
 
   let pt;
   try {
-    pt = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, key, ct);
+    // tagLength must match what was used during encryption
+    pt = await crypto.subtle.decrypt({ name: 'AES-GCM', iv, tagLength: TAG_LEN }, key, ct);
   } catch {
+    // Intentionally unified: we don't distinguish "wrong passphrase" from "corrupted data"
+    // to avoid leaking information (prevents a decryption oracle).
     throw new Error('Decryption failed — wrong passphrase or corrupted data');
   }
 
@@ -722,6 +750,12 @@ async function doDecrypt() {
 }
 
 /* ── Keyboard shortcut (⌘ / Ctrl + Enter) ───────────────────────── */
+// Detect Mac vs Windows/Linux once at load time and update the hint text.
+const MOD_KEY = /Mac|iPhone|iPad|iPod/.test(navigator.userAgent) ? '⌘' : 'Ctrl';
+document.querySelectorAll('.hint').forEach(el => {
+  el.textContent = el.textContent.replace('⌘', MOD_KEY);
+});
+
 document.addEventListener('keydown', e => {
   if ((e.metaKey || e.ctrlKey) && e.key === 'Enter') {
     const active = document.querySelector('.panel.active');
@@ -730,11 +764,16 @@ document.addEventListener('keydown', e => {
   }
 });
 
-/* ── Detect non-secure context ───────────────────────────────────── */
-if (location.protocol !== 'https:' && location.hostname !== 'localhost') {
+/* ── Secure context / Web Crypto availability guard ─────────────── */
+// window.isSecureContext is the canonical API for checking HTTPS or localhost.
+// crypto.subtle is undefined in non-secure contexts (browsers block it by spec).
+// Checking both covers edge cases where isSecureContext might be missing (very old browsers).
+if (!window.isSecureContext || !crypto?.subtle) {
+  // Disable all action buttons so no misleading "Working…" state appears
+  document.querySelectorAll('.action').forEach(b => b.disabled = true);
   document.querySelector('.page').insertAdjacentHTML('afterbegin',
-    `<div class="status error" style="margin-bottom:1.5rem">
-      ⚠ Insecure context — open this site over HTTPS for the Web Crypto API to work.
+    `<div class="status error" style="margin-bottom:1.5rem;display:block">
+      Web Crypto API unavailable — open this site over HTTPS (not HTTP).
     </div>`
   );
 }
